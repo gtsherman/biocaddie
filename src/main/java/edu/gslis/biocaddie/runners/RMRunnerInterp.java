@@ -1,11 +1,9 @@
 package edu.gslis.biocaddie.runners;
 
-import java.io.BufferedWriter;
 import java.io.File;
 import java.io.FileNotFoundException;
 import java.io.FileWriter;
 import java.io.IOException;
-import java.io.OutputStreamWriter;
 import java.io.Writer;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -42,9 +40,6 @@ public class RMRunnerInterp implements Runnable {
 	public static DocScorer origDocScorer;
 	public static DocScorer origDocZeroMuScorer;
 
-	Writer outputWriter = new BufferedWriter(new OutputStreamWriter(System.out));
-	FormattedOutputTrecEval output = FormattedOutputTrecEval.getInstance("expansionRM3", outputWriter);
-	
 	public void setQuery(GQuery query) {
 		this.query = query;
 	}
@@ -111,28 +106,29 @@ public class RMRunnerInterp implements Runnable {
 		for (int origW = 0; origW <= 10; origW++) {
 			double origWeight = origW / 10.0;
 			
-			for (int pubmedW = origW; pubmedW <= 10; pubmedW++) {
+			for (int pubmedW = 0; pubmedW <= 10 - origW; pubmedW++) {
 
 				double pubmedWeight = pubmedW / 10.0;
-				double wikiWeight = (10 - pubmedW) / 10.0;
+				double wikiWeight = (10 - (pubmedW + origW)) / 10.0;
 					
 				FeatureVector rmVec = new FeatureVector(null);
 				for (SearchHit doc : initialResults) {
+					
 					FeatureVector origTermWeights = origTerms.get(doc.getDocno());
 					FeatureVector pubmedTermWeights = pubmedTerms.get(doc.getDocno());
 					FeatureVector wikiTermWeights = wikiTerms.get(doc.getDocno());
 					
 					QueryLikelihoodQueryScorer queryScorer = new QueryLikelihoodQueryScorer(origDocScorer);
-					double queryOrigScore = queryScorer.scoreQuery(query, doc);
+					double queryOrigScore = Math.exp(queryScorer.scoreQuery(query, doc));
 
 					double queryPMScore = 1.0;
 					Iterator<String> queryIt = query.getFeatureVector().iterator();
 					while (queryIt.hasNext()) {
 						String term = queryIt.next();
 						double termScore = pubmedTermWeights.getFeatureWeight(term);
-						/*if (termScore == 0.0) {
+						if (termScore == 0.0) {
 							termScore = (pubmedCS.termCount(term) + 1) / pubmedCS.getTokCount();
-						}*/
+						}
 						queryPMScore *= termScore;
 					}
 					double queryPubmedScore = queryPMScore;
@@ -142,9 +138,9 @@ public class RMRunnerInterp implements Runnable {
 					while (queryIt.hasNext()) {
 						String term = queryIt.next();
 						double termScore = wikiTermWeights.getFeatureWeight(term);
-						/*if (termScore == 0.0) {
+						if (termScore == 0.0) {
 							termScore = (wikiCS.termCount(term) + 1) / wikiCS.getTokCount();
-						}*/
+						}
 						queryWScore *= termScore;
 					}
 					double queryWikiScore = queryWScore;
@@ -157,9 +153,9 @@ public class RMRunnerInterp implements Runnable {
 						.stream()
 						//.parallel()
 						.forEach(term -> rmVec.addTerm(term, 
-								origWeight * origTermWeights.getFeatureWeight(term) + 
+								(origWeight * origTermWeights.getFeatureWeight(term) + 
 										pubmedWeight * pubmedTermWeights.getFeatureWeight(term) +
-										wikiWeight * wikiTermWeights.getFeatureWeight(term) + 1 *
+										wikiWeight * wikiTermWeights.getFeatureWeight(term)) *
 								queryScore));
 				}
 				rmVec.normalize();
@@ -182,24 +178,21 @@ public class RMRunnerInterp implements Runnable {
 						
 						for (int mu : new int[] {50, 250, 500, 1000, 5000, 10000, 2500}) {
 							index.setMu(mu);
-							
-							String run = "d" + fbDocs + "_t" + fbTerms + "_o" + origWeight + "_p" + pubmedWeight + "_w" + wikiWeight + "_l" + lam + "_m" + mu;
-							output.setRunId(run);
-							try {
-								output.setWriter(new FileWriter(outdir + File.separator + run, true));
-							} catch (IOException e) {
-								System.err.println("Error setting file writer");
-								e.printStackTrace(System.err);
-								System.exit(-1);
-							}
-							
 							SearchHits results = index.runQuery(newQuery, 1000);
+
+							String run = "d" + fbDocs + "_t" + fbTerms + "_o" + origWeight + "_p" + pubmedWeight + "_w" + wikiWeight + "_l" + lam + "_m" + mu;
 							synchronized(this) {
-								output.write(results, newQuery.getTitle());
-								if (Double.isNaN(results.getHit(0).getScore())) {
-									System.err.println("Got NaN:");
-									System.err.println("Params: " + run);
-									System.err.println("Query: " + newQuery);
+								try {
+									Writer outputWriter = new FileWriter(outdir + File.separator + run, true);
+									FormattedOutputTrecEval output = new FormattedOutputTrecEval();
+									output.setRunId(run);
+									output.setWriter(outputWriter);
+									output.write(results, newQuery.getTitle());
+									outputWriter.close();
+								} catch (IOException e) {
+									System.err.println("Error setting file writer");
+									e.printStackTrace(System.err);
+									System.exit(-1);
 								}
 							}
 						}
@@ -237,7 +230,7 @@ public class RMRunnerInterp implements Runnable {
 			}
 			scanner.close();
 		} catch (FileNotFoundException e) {
-			System.err.print("Can't find " + location + File.separator + doc.getDocno());
+			System.err.println("Missing model: " + location + File.separator + doc.getDocno());
 			//System.exit(-1);
 		}
 		return model;
